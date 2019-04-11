@@ -160,3 +160,19 @@ alias(
 exports_files([
   ".scalafmt.conf"
 ])
+# Buildifier.
+
+load("@com_github_bazelbuild_buildtools//buildifier:def.bzl", "buildifier")
+
+# Run this to check if BUILD files are well-formatted.
+buildifier(
+    name = "buildifier",
+    mode = "check",
+)
+
+# Run this to fix the errors in BUILD files.
+buildifier(
+    name = "buildifier-fix",
+    mode = "fix",
+    verbose = True,
+)
