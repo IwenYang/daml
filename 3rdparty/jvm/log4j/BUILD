@@ -2,14 +2,13 @@
 # See 3rdparty/README.md
 load("@io_bazel_rules_scala//scala:scala.bzl", "scala_library")
 load("@io_bazel_rules_scala//scala:scala_import.bzl", "scala_import")
+
 java_library(
     name = "log4j",
-    exports = [
-        "//external:jar/log4j/log4j"
-    ],
     visibility = [
-        "//3rdparty/jvm:__subpackages__"
-    ]
+        "//3rdparty/jvm:__subpackages__",
+    ],
+    exports = [
+        "//external:jar/log4j/log4j",
+    ],
 )
-
-

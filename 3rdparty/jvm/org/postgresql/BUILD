@@ -2,14 +2,13 @@
 # See 3rdparty/README.md
 load("@io_bazel_rules_scala//scala:scala.bzl", "scala_library")
 load("@io_bazel_rules_scala//scala:scala_import.bzl", "scala_import")
+
 java_library(
     name = "postgresql",
-    exports = [
-        "//external:jar/org/postgresql/postgresql"
-    ],
     visibility = [
-        "//visibility:public"
-    ]
+        "//visibility:public",
+    ],
+    exports = [
+        "//external:jar/org/postgresql/postgresql",
+    ],
 )
-
-

@@ -2,74 +2,65 @@
 # See 3rdparty/README.md
 load("@io_bazel_rules_scala//scala:scala.bzl", "scala_library")
 load("@io_bazel_rules_scala//scala:scala_import.bzl", "scala_import")
+
 java_library(
     name = "junit_platform_commons",
+    visibility = [
+        "//3rdparty/jvm:__subpackages__",
+    ],
     exports = [
         "//3rdparty/jvm/org/apiguardian:apiguardian_api",
-        "//external:jar/org/junit/platform/junit_platform_commons"
+        "//external:jar/org/junit/platform/junit_platform_commons",
     ],
-    visibility = [
-        "//3rdparty/jvm:__subpackages__"
-    ]
 )
-
-
 
 java_library(
     name = "junit_platform_engine",
-    exports = [
-        "//3rdparty/jvm/org/apiguardian:apiguardian_api",
-        "//3rdparty/jvm/org/opentest4j:opentest4j",
-        "//external:jar/org/junit/platform/junit_platform_engine",
-        ":junit_platform_commons"
-    ],
     visibility = [
-        "//visibility:public"
-    ]
+        "//visibility:public",
+    ],
+    exports = [
+        ":junit_platform_commons",
+        "//3rdparty/jvm/org/apiguardian:apiguardian_api",
+        "//3rdparty/jvm/org/opentest4j",
+        "//external:jar/org/junit/platform/junit_platform_engine",
+    ],
 )
-
-
 
 java_library(
     name = "junit_platform_launcher",
+    visibility = [
+        "//3rdparty/jvm:__subpackages__",
+    ],
     exports = [
+        ":junit_platform_engine",
         "//3rdparty/jvm/org/apiguardian:apiguardian_api",
         "//external:jar/org/junit/platform/junit_platform_launcher",
-        ":junit_platform_engine"
     ],
-    visibility = [
-        "//3rdparty/jvm:__subpackages__"
-    ]
 )
-
-
 
 java_library(
     name = "junit_platform_runner",
+    visibility = [
+        "//visibility:public",
+    ],
     exports = [
-        "//3rdparty/jvm/junit:junit",
+        ":junit_platform_launcher",
+        ":junit_platform_suite_api",
+        "//3rdparty/jvm/junit",
         "//3rdparty/jvm/org/apiguardian:apiguardian_api",
         "//external:jar/org/junit/platform/junit_platform_runner",
-        ":junit_platform_launcher",
-        ":junit_platform_suite_api"
     ],
-    visibility = [
-        "//visibility:public"
-    ]
 )
-
-
 
 java_library(
     name = "junit_platform_suite_api",
+    visibility = [
+        "//3rdparty/jvm:__subpackages__",
+    ],
     exports = [
+        ":junit_platform_commons",
         "//3rdparty/jvm/org/apiguardian:apiguardian_api",
         "//external:jar/org/junit/platform/junit_platform_suite_api",
-        ":junit_platform_commons"
     ],
-    visibility = [
-        "//3rdparty/jvm:__subpackages__"
-    ]
 )
-
-

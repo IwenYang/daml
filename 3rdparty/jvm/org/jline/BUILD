@@ -2,39 +2,34 @@
 # See 3rdparty/README.md
 load("@io_bazel_rules_scala//scala:scala.bzl", "scala_library")
 load("@io_bazel_rules_scala//scala:scala_import.bzl", "scala_import")
+
 java_library(
     name = "jline",
-    exports = [
-        "//external:jar/org/jline/jline"
-    ],
     visibility = [
-        "//visibility:public"
-    ]
+        "//visibility:public",
+    ],
+    exports = [
+        "//external:jar/org/jline/jline",
+    ],
 )
-
-
 
 java_library(
     name = "jline_reader",
-    exports = [
-        "//external:jar/org/jline/jline_reader",
-        ":jline_terminal"
-    ],
     visibility = [
-        "//visibility:public"
-    ]
+        "//visibility:public",
+    ],
+    exports = [
+        ":jline_terminal",
+        "//external:jar/org/jline/jline_reader",
+    ],
 )
-
-
 
 java_library(
     name = "jline_terminal",
-    exports = [
-        "//external:jar/org/jline/jline_terminal"
-    ],
     visibility = [
-        "//3rdparty/jvm:__subpackages__"
-    ]
+        "//3rdparty/jvm:__subpackages__",
+    ],
+    exports = [
+        "//external:jar/org/jline/jline_terminal",
+    ],
 )
-
-
