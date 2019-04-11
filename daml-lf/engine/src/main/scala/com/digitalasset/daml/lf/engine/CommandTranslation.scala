@@ -3,55 +3,25 @@
 
 package com.digitalasset.daml.lf.engine
 
+import java.util
+
 import com.digitalasset.daml.lf.data.Ref._
 import com.digitalasset.daml.lf.data._
 import com.digitalasset.daml.lf.lfpackage.Ast._
 import com.digitalasset.daml.lf.lfpackage.Util._
+import com.digitalasset.daml.lf.speedy.{SValue, Command => SpeedyCommand}
 import com.digitalasset.daml.lf.value.Value
 import com.digitalasset.daml.lf.value.Value._
+
+import scala.collection.immutable.HashMap
 
 private[engine] object CommandTranslation {
   def apply(compiledPackages: ConcurrentCompiledPackages): CommandTranslation = {
     new CommandTranslation(compiledPackages)
   }
-
-  private def tEntry(elemType: Type) =
-    TTuple(ImmArray(("key", TBuiltin(BTText)), ("value", elemType)))
-
-  private def entry(key: String, value: Expr): Expr =
-    ETupleCon(ImmArray("key" -> EPrimLit(PLText(key)), "value" -> value))
-
-  private def emptyMap(elemType: Type) =
-    EBuiltin(BMapEmpty) eTyApp elemType
-
-  private def fold(aType: Type, bType: Type, f: Expr, b: Expr, as: Expr) =
-    EBuiltin(BFoldl) eTyApp (aType, bType) eApp (f, b, as)
-
-  private def insert(elemType: Type, key: Expr, value: Expr, map: Expr) =
-    EBuiltin(BMapInsert) eTyApp elemType eApp (key, value, map)
-
-  private def get(key: String, tuple: Expr) =
-    ETupleProj(key, tuple)
-
-  private def buildList(elemType: Type, list: ImmArray[Expr]) =
-    ECons(elemType, list, ENil(elemType))
-
-  private def buildMap(elemType: Type, list: Expr): Expr = {
-    val f =
-      EAbs(
-        "acc" -> TMap(elemType),
-        EAbs(
-          "entry" -> tEntry(elemType),
-          insert(elemType, get("key", EVar("entry")), get("value", EVar("entry")), EVar("acc")),
-          None),
-        None)
-    fold(tEntry(elemType), TMap(elemType), f, emptyMap(elemType), list)
-  }
-
 }
 
 private[engine] class CommandTranslation(compiledPackages: ConcurrentCompiledPackages) {
-  import CommandTranslation._
 
   // we use this for easier error handling in translateValues
   private[this] case class CommandTranslationException(err: Error)
@@ -94,7 +64,8 @@ private[engine] class CommandTranslation(compiledPackages: ConcurrentCompiledPac
   // here, too.
   private[engine] def translateValue(
       ty0: Type,
-      v0: VersionedValue[AbsoluteContractId]): Result[Expr] = {
+      v0: VersionedValue[AbsoluteContractId]): Result[SValue] = {
+    import SValue._
     import scalaz.syntax.traverse.ToTraverseOps
 
     def exceptionToResultError[A](x: => Result[A]): Result[A] =
@@ -104,7 +75,7 @@ private[engine] class CommandTranslation(compiledPackages: ConcurrentCompiledPac
         case CommandTranslationException(err) => ResultError(err)
       }
 
-    def go(nesting: Int, ty: Type, value: Value[AbsoluteContractId]): Result[Expr] = {
+    def go(nesting: Int, ty: Type, value: Value[AbsoluteContractId]): Result[SValue] = {
       // we use this to restart when we get a new package that allows us to make progress.
       def restart = exceptionToResultError(go(nesting, ty, value))
 
@@ -115,53 +86,45 @@ private[engine] class CommandTranslation(compiledPackages: ConcurrentCompiledPac
         (ty, value) match {
           // simple values
           case (TBuiltin(BTUnit), ValueUnit) =>
-            ResultDone(EPrimCon(PCUnit))
+            ResultDone(SUnit(()))
           case (TBuiltin(BTBool), ValueBool(b)) =>
-            if (b) ResultDone(EPrimCon(PCTrue))
-            else ResultDone(EPrimCon(PCFalse))
+            ResultDone(SBool(b))
           case (TBuiltin(BTInt64), ValueInt64(i)) =>
-            ResultDone(EPrimLit(PLInt64(i)))
+            ResultDone(SInt64(i))
           case (TBuiltin(BTTimestamp), ValueTimestamp(t)) =>
-            ResultDone(EPrimLit(PLTimestamp(t)))
+            ResultDone(STimestamp(t))
           case (TBuiltin(BTDate), ValueDate(t)) =>
-            ResultDone(EPrimLit(PLDate(t)))
+            ResultDone(SDate(t))
           case (TBuiltin(BTText), ValueText(t)) =>
-            ResultDone(EPrimLit(PLText(t)))
+            ResultDone(SText(t))
           case (TBuiltin(BTDecimal), ValueDecimal(d)) =>
-            ResultDone(EPrimLit(PLDecimal(d)))
+            ResultDone(SDecimal(d))
           case (TBuiltin(BTParty), ValueParty(p)) =>
-            ResultDone(EPrimLit(PLParty(p)))
+            ResultDone(SParty(p))
           case (TContractId(typ), ValueContractId(c)) =>
             typ match {
-              case TTyCon(name) => ResultDone(EContractId(c.coid, name))
+              case TTyCon(_) => ResultDone(SContractId(c))
               case _ => fail(s"Expected a type constructor but found $typ.")
             }
 
           // optional
           case (TOptional(elemType), ValueOptional(mb)) =>
             mb match {
-              case None => ResultDone(ENone(elemType))
-              case Some(v0) => go(newNesting, elemType, v0).map(v1 => ESome(elemType, v1))
+              case None => ResultDone(SOptional(None))
+              case Some(v0) => go(newNesting, elemType, v0).map(v1 => SOptional(Some(v1)))
             }
 
           // list
           case (TList(elemType), ValueList(ls)) =>
-            if (ls.isEmpty) {
-              ResultDone(ENil(elemType))
-            } else {
-              ls.toImmArray
-                .traverseU(go(newNesting, elemType, _))
-                .map(es => ECons(elemType, es, ENil(elemType)))
-            }
+            ls.toImmArray.traverseU(go(newNesting, elemType, _)).map(es => SList(FrontStack(es)))
 
           // map
           case (TMap(elemType), ValueMap(map)) =>
             map.toImmArray
               .traverseU {
-                case (key0, value0) => go(newNesting, elemType, value0).map(entry(key0, _))
+                case (key0, value0) => go(newNesting, elemType, value0).map(key0 -> _)
               }
-              .map(l => buildMap(elemType, buildList(tEntry(elemType), l)))
-
+              .map(l => SMap(HashMap(l.toSeq: _*)))
           // variants
           case (TTyConApp(tyCon, tyConArgs), ValueVariant(mbVariantId, constructorName, value)) =>
             val variantId = tyCon
@@ -199,7 +162,7 @@ private[engine] class CommandTranslation(compiledPackages: ConcurrentCompiledPac
                             val instantiatedArgTyp =
                               replaceParameters(dataTypParams.map(_._1).zip(tyConArgs), argTyp)
                             go(newNesting, instantiatedArgTyp, value).map(e =>
-                              EVariantCon(TypeConApp(tyCon, tyConArgs), constructorName, e))
+                              SVariant(tyCon, constructorName, e))
                         }
                     }
                 }
@@ -251,7 +214,15 @@ private[engine] class CommandTranslation(compiledPackages: ConcurrentCompiledPac
                               val replacedTyp = replaceParameters(params, typ)
                               go(newNesting, replacedTyp, v).map(e => (lbl, e))
                           }
-                          .map(flds => ERecCon(TypeConApp(tyCon, tyConArgs), flds))
+                          .map { flds =>
+                            val values = new util.ArrayList[SValue](flds.length)
+                            flds.iterator.foreach { case (_, v) => values.add(v) }
+                            SRecord(
+                              tyCon,
+                              flds.iterator.map(_._1).toArray,
+                              values
+                            )
+                          }
                     }
                 }
             }
@@ -267,7 +238,7 @@ private[engine] class CommandTranslation(compiledPackages: ConcurrentCompiledPac
 
   private[engine] def translateCreate(
       templateId: Identifier,
-      argument: VersionedValue[AbsoluteContractId]): Result[(Type, Expr)] =
+      argument: VersionedValue[AbsoluteContractId]): Result[(Type, SpeedyCommand)] =
     Result.needDataType(
       compiledPackages,
       templateId,
@@ -279,14 +250,14 @@ private[engine] class CommandTranslation(compiledPackages: ConcurrentCompiledPac
             s"Unexpected type parameters ${dataType.params} for template $templateId. Template datatypes should never have parameters."))
         } else {
           val typ = TTyCon(templateId)
-          translateValue(typ, argument).map(e => (typ, EUpdate(UpdateCreate(templateId, e))))
+          translateValue(typ, argument).map(typ -> SpeedyCommand.Create(templateId, _))
         }
       }
     )
 
   private[engine] def translateFetch(
       templateId: Identifier,
-      coid: AbsoluteContractId): Result[(Type, Expr)] =
+      coid: AbsoluteContractId): Result[(Type, SpeedyCommand)] =
     Result.needDataType(
       compiledPackages,
       templateId,
@@ -298,7 +269,7 @@ private[engine] class CommandTranslation(compiledPackages: ConcurrentCompiledPac
             s"Unexpected type parameters ${dataType.params} for template $templateId. Template datatypes should never have parameters."))
         } else {
           val typ = TTyCon(templateId)
-          ResultDone((typ, EUpdate(UpdateFetch(templateId, EContractId(coid.coid, templateId)))))
+          ResultDone(typ -> SpeedyCommand.Fetch(templateId, SValue.SContractId(coid)))
         }
       }
     )
@@ -311,7 +282,7 @@ private[engine] class CommandTranslation(compiledPackages: ConcurrentCompiledPac
       // or the acting parties of an exercise node
       // of a transaction under reconstruction for validation
       actors: Set[Party],
-      argument: VersionedValue[AbsoluteContractId]) =
+      argument: VersionedValue[AbsoluteContractId]): Result[(Type, SpeedyCommand)] =
     Result.needTemplate(
       compiledPackages,
       templateId,
@@ -323,22 +294,10 @@ private[engine] class CommandTranslation(compiledPackages: ConcurrentCompiledPac
               s"Couldn't find requested choice $choiceId for template $templateId. Available choices: $choicesNames"))
           case Some(choice) =>
             val choiceTyp = choice.argBinder._2
-            val actingParties =
-              ECons(
-                TBuiltin(BTParty),
-                ImmArray(actors.map(actor => EPrimLit(PLParty(actor))).toSeq),
-                ENil(TBuiltin(BTParty)))
+            val actingParties = ImmArray(actors.toSeq.map(actor => SValue.SParty(actor)))
             translateValue(choiceTyp, argument).map(
-              e =>
-                (
-                  choiceTyp,
-                  EUpdate(
-                    UpdateExercise(
-                      templateId,
-                      choiceId,
-                      EContractId(contractId.coid, templateId),
-                      actingParties,
-                      e))))
+              choiceTyp -> SpeedyCommand
+                .Exercise(templateId, SValue.SContractId(contractId), choiceId, actingParties, _))
         }
       }
     )
@@ -356,20 +315,19 @@ private[engine] class CommandTranslation(compiledPackages: ConcurrentCompiledPac
     }
   }
 
-  private[engine] def commandTranslation(cmds: Commands): Result[Expr] = {
-    def transformCommand(cmd: Command): Result[(Type, Expr)] = cmd match {
-      case CreateCommand(templateId, argument) =>
-        translateCreate(templateId, argument)
-      case ExerciseCommand(templateId, contractId, choiceId, submitter, argument) =>
-        translateExercise(
-          templateId,
-          AbsoluteContractId(contractId),
-          choiceId,
-          Set(submitter),
-          argument)
-    }
-    val bindings: Result[ImmArray[(Type, Expr)]] =
-      Result.sequence(ImmArray(cmds.commands).map(transformCommand))
-    bindings.map(buildUpdate)
+  private[engine] def transformCommand(cmd: Command): Result[(Type, SpeedyCommand)] = cmd match {
+    case CreateCommand(templateId, argument) =>
+      translateCreate(templateId, argument)
+    case ExerciseCommand(templateId, contractId, choiceId, submitter, argument) =>
+      translateExercise(
+        templateId,
+        AbsoluteContractId(contractId),
+        choiceId,
+        Set(submitter),
+        argument)
   }
+
+  private[engine] def commandTranslation(cmds: Commands): Result[ImmArray[(Type, SpeedyCommand)]] =
+    Result.sequence(ImmArray(cmds.commands).map(transformCommand))
+
 }

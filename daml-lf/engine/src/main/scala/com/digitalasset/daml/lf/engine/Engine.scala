@@ -15,8 +15,10 @@ import com.digitalasset.daml.lf.transaction.Node._
 import com.digitalasset.daml.lf.transaction.{Transaction => Tx}
 import com.digitalasset.daml.lf.types.Ledger
 import com.digitalasset.daml.lf.value.Value._
+import com.digitalasset.daml.lf.speedy.{Command => SpeedyCommand}
 
 import scala.annotation.tailrec
+import scala.util.control.NonFatal
 
 /**
   * Allows for evaluating [[Commands]] and validating [[Transaction]]s.
@@ -67,10 +69,11 @@ final class Engine {
     * </li>
     * </ul>
     */
-  def submit(cmds: Commands): Result[Transaction.Transaction] =
+  def submit(cmds: Commands): Result[Transaction.Transaction] = {
     commandTranslation
       .commandTranslation(cmds)
       .flatMap(interpret(_, cmds.ledgerEffectiveTime))
+  }
 
   /**
     * Behaves like `submit`, but it takes GenNode arguments instead of a Commands argument.
@@ -91,8 +94,8 @@ final class Engine {
       ledgerEffectiveTime: Time.Timestamp
   ): Result[Transaction.Transaction] = {
     for {
-      expressions <- Result.sequence(ImmArray(nodes).map(translateNode(commandTranslation)))
-      result <- interpret(commandTranslation.buildUpdate(expressions), ledgerEffectiveTime)
+      commands <- Result.sequence(ImmArray(nodes).map(translateNode(commandTranslation)))
+      result <- interpret(commands, ledgerEffectiveTime)
     } yield result
   }
 
@@ -113,8 +116,8 @@ final class Engine {
   ): Result[Unit] = {
     //reinterpret
     for {
-      bindings_ <- translateTransactionRoots(commandTranslation, tx)
-      rtx <- interpret(commandTranslation.buildUpdate(bindings_.map(_._2)), ledgerEffectiveTime)
+      commands <- translateTransactionRoots(commandTranslation, tx)
+      rtx <- interpret(commands.map(_._2), ledgerEffectiveTime)
       validationResult <- if (tx isReplayedBy rtx) {
         ResultDone(())
       } else {
@@ -149,13 +152,13 @@ final class Engine {
       @tailrec
       def go(
           state: Result[Transaction.Transaction],
-          roots: FrontStack[(Transaction.NodeId, (Type, Expr))])
+          roots: FrontStack[(Transaction.NodeId, (Type, SpeedyCommand))])
         : Result[Transaction.Transaction] = {
         roots match {
           case FrontStack() => state
-          case FrontStackCons((id, (_, expr)), rs) =>
+          case FrontStackCons((id, (_, cmd)), rs) =>
             val nextStep: Result[Transaction.Transaction] = for {
-              t <- interpretFromNodeId(expr, id, ledgerEffectiveTime)
+              t <- interpretFromNodeId(cmd, id, ledgerEffectiveTime)
               o <- state
               newNodes = t.nodes ++ o.nodes
             } yield o.copy(nodes = newNodes, roots = (BackStack(o.roots) :++ t.roots).toImmArray)
@@ -253,7 +256,7 @@ final class Engine {
 
   // Translate a GenNode into an expression re-interpretable by the interpreter
   private[this] def translateNode[Cid <: ContractId](commandTranslation: CommandTranslation)(
-      node: GenNode.WithTxValue[Transaction.NodeId, Cid]): Result[(Type, Expr)] = {
+      node: GenNode.WithTxValue[Transaction.NodeId, Cid]): Result[(Type, SpeedyCommand)] = {
 
     node match {
       case NodeCreate(coid @ _, coinst, optLoc @ _, sigs @ _, stks @ _, key @ _) =>
@@ -293,7 +296,7 @@ final class Engine {
   private[this] def translateTransactionRoots[Cid <: ContractId](
       commandTranslation: CommandTranslation,
       tx: GenTransaction[Transaction.NodeId, Cid, Transaction.Value[Cid]])
-    : Result[ImmArray[(Transaction.NodeId, (Type, Expr))]] = {
+    : Result[ImmArray[(Transaction.NodeId, (Type, SpeedyCommand))]] = {
     Result.sequence(tx.roots.map(id =>
       tx.nodes.get(id) match {
         case None =>
@@ -308,13 +311,13 @@ final class Engine {
   }
 
   private[engine] def interpretFromNodeId(
-      expr: Expr,
+      command: SpeedyCommand,
       nodeId: Transaction.NodeId,
       time: Time.Timestamp
   ): Result[Transaction.Transaction] = {
 
     val machine =
-      Machine.build(Compiler(compiledPackages.packages).compile(expr), compiledPackages)
+      Machine.build(Compiler(compiledPackages.packages).compile(command), compiledPackages)
     machine.ptx = machine.ptx.copy(nextNodeId = nodeId)
     interpretLoop(machine, time)
   }
@@ -324,6 +327,16 @@ final class Engine {
       time: Time.Timestamp): Result[Transaction.Transaction] = {
     val machine =
       Machine.build(Compiler(compiledPackages.packages).compile(expr), compiledPackages)
+
+    interpretLoop(machine, time)
+  }
+
+  private[engine] def interpret(
+      commands: ImmArray[(Type, SpeedyCommand)],
+      time: Time.Timestamp): Result[Transaction.Transaction] = {
+    val machine = Machine.build(
+      Compiler(compiledPackages.packages).compile(commands.map(_._2)),
+      compiledPackages)
 
     interpretLoop(machine, time)
   }
